@@ -40,6 +40,8 @@ services:
     build:
       context: .
       dockerfile: apps/demo-app/Dockerfile
+      args:
+        BUILD_TIME: ${BUILD_TIME:-}
     ports:
       - "3000:3000"
     environment:
