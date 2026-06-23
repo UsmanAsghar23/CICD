@@ -1,14 +1,21 @@
-import Fastify from "fastify";
+import { buildApp } from "./app.js";
+import { loadConfig } from "./config.js";
+import { createDatabase } from "./db/client.js";
 
-const port = Number(process.env.PORT ?? 3001);
+const config = loadConfig();
+const database = createDatabase(config);
 
-const app = Fastify({ logger: true });
+await database.init();
 
-app.get("/health", async () => ({ status: "ok", service: "control-plane" }));
+const app = await buildApp(config, database.db);
 
-app.get("/", async () => ({
-  service: "control-plane",
-  message: "Deploy preview control plane (stub — Part 3 will add webhooks and DB)",
-}));
+const shutdown = async () => {
+  await app.close();
+  await database.close();
+  process.exit(0);
+};
 
-await app.listen({ port, host: "0.0.0.0" });
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+await app.listen({ port: config.port, host: "0.0.0.0" });

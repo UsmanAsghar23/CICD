@@ -27,6 +27,7 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-dev-secret}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:-preview.example.com}
+      CONTROL_PLANE_TOKEN: ${CONTROL_PLANE_TOKEN:-dev-token}
     depends_on:
       postgres:
         condition: service_healthy
