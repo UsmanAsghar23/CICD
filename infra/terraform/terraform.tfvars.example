@@ -1,0 +1,12 @@
+aws_region        = "us-east-1"
+project_name      = "deploy-preview"
+domain_name       = "example.com"
+preview_subdomain = "preview"
+route53_zone_id   = "Z0123456789ABCDEFGHIJ"
+
+# GitHub repo allowed to assume the deploy role (owner/repo)
+github_repository = "your-username/CICD"
+
+# Optional: use an existing VPC instead of creating one
+# vpc_id             = "vpc-0123456789abcdef0"
+# public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
