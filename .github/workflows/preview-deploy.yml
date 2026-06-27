@@ -1,0 +1,118 @@
+name: Preview Deploy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  BRANCH: ${{ github.event.pull_request.head.ref }}
+  COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+  IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  BUILD_TIME: ${{ github.run_started_at }}
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push demo-app image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker build \
+            -f apps/demo-app/Dockerfile \
+            --build-arg BUILD_TIME="${BUILD_TIME}" \
+            -t "${IMAGE_URI}" \
+            .
+          docker push "${IMAGE_URI}"
+
+      - name: Wait for control plane deployment record
+        id: deployment
+        if: ${{ secrets.CONTROL_PLANE_URL != '' && secrets.CONTROL_PLANE_TOKEN != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          DEPLOYMENT_ID="$(bash scripts/control-plane.sh wait "${PR_NUMBER}" "${{ github.repository }}")"
+          echo "deployment_id=${DEPLOYMENT_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Mark deployment building
+        if: ${{ steps.deployment.outputs.deployment_id != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          bash scripts/control-plane.sh patch \
+            "${{ steps.deployment.outputs.deployment_id }}" \
+            "building" \
+            "" \
+            "${COMMIT_SHA}"
+
+      - name: Deploy preview to ECS
+        id: deploy
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          VPC_ID: ${{ vars.VPC_ID }}
+          PUBLIC_SUBNET_IDS: ${{ vars.PUBLIC_SUBNET_IDS }}
+          ECS_TASKS_SECURITY_GROUP_ID: ${{ vars.ECS_TASKS_SECURITY_GROUP_ID }}
+          ECS_TASK_EXECUTION_ROLE_ARN: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+          ECS_TASK_ROLE_ARN: ${{ vars.ECS_TASK_ROLE_ARN }}
+          ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+          PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
+          CLOUDWATCH_LOG_GROUP: ${{ vars.CLOUDWATCH_LOG_GROUP }}
+        run: |
+          bash scripts/deploy-preview.sh | tee deploy.env
+          # shellcheck disable=SC1091
+          source deploy.env
+          echo "preview_url=${PREVIEW_URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Mark deployment live
+        if: ${{ success() && steps.deployment.outputs.deployment_id != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          bash scripts/control-plane.sh patch \
+            "${{ steps.deployment.outputs.deployment_id }}" \
+            "live" \
+            "${{ steps.deploy.outputs.preview_url }}" \
+            "${COMMIT_SHA}"
+
+      - name: Mark deployment failed
+        if: ${{ failure() && steps.deployment.outputs.deployment_id != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          bash scripts/control-plane.sh patch \
+            "${{ steps.deployment.outputs.deployment_id }}" \
+            "failed" \
+            "" \
+            "${COMMIT_SHA}"

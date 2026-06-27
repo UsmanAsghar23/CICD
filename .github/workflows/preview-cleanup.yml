@@ -1,0 +1,56 @@
+name: Preview Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+jobs:
+  cleanup-preview:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Wait for control plane deployment record
+        id: deployment
+        if: ${{ secrets.CONTROL_PLANE_URL != '' && secrets.CONTROL_PLANE_TOKEN != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          DEPLOYMENT_ID="$(bash scripts/control-plane.sh wait "${PR_NUMBER}" "${{ github.repository }}" || true)"
+          echo "deployment_id=${DEPLOYMENT_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cleanup preview resources
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: bash scripts/cleanup-preview.sh
+
+      - name: Mark deployment destroyed
+        if: ${{ steps.deployment.outputs.deployment_id != '' }}
+        env:
+          CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+          CONTROL_PLANE_TOKEN: ${{ secrets.CONTROL_PLANE_TOKEN }}
+        run: |
+          bash scripts/control-plane.sh patch \
+            "${{ steps.deployment.outputs.deployment_id }}" \
+            "destroyed"
