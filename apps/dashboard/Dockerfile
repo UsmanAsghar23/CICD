@@ -9,7 +9,11 @@ COPY tsconfig.base.json ./
 COPY apps/dashboard ./apps/dashboard
 
 ARG VITE_API_URL=http://localhost:3001
+ARG VITE_AWS_REGION=
+ARG VITE_CLOUDWATCH_LOG_GROUP=
 ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_AWS_REGION=$VITE_AWS_REGION
+ENV VITE_CLOUDWATCH_LOG_GROUP=$VITE_CLOUDWATCH_LOG_GROUP
 RUN npm run build --workspace=@deploy-preview/dashboard
 
 FROM node:20-alpine AS runner
